@@ -1,56 +1,57 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import re
-from typing import Optional, Dict, Any
+import os
+import boto3
+from botocore.client import Config
 
-app = FastAPI(title="Google Drive Link Generator API")
-
-
-class DriveLink(BaseModel):
-    share_url: str
+app = FastAPI(title="S3 Presigned URL Generator")
 
 
-def convert_drive_link(share_url: str) -> Optional[Dict[str, Any]]:
-    """
-    Convert various Google Drive share link formats into a normalized response.
-
-    - File links like:
-      - https://drive.google.com/file/d/<id>/view?... -> direct download URL
-      - https://drive.google.com/open?id=<id> -> direct download URL
-    - Folder links like:
-      - https://drive.google.com/drive/folders/<id>
-      - https://drive.google.com/drive/u/1/folders/<id>
-
-    Returns a dict with keys: `type` ('file'|'folder'), `id`, and `link` (normalized).
-    Returns None if not recognized.
-    """
-    if not isinstance(share_url, str):
-        return None
-
-    # 1) File id in /d/<id>/
-    m = re.search(r'/d/([a-zA-Z0-9_-]+)', share_url)
-    if m:
-        fid = m.group(1)
-        return {"type": "file", "id": fid, "link": f"https://drive.google.com/uc?export=download&id={fid}"}
-
-    # 2) open?id=<id> or ?id=<id>
-    m = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', share_url)
-    if m:
-        fid = m.group(1)
-        return {"type": "file", "id": fid, "link": f"https://drive.google.com/uc?export=download&id={fid}"}
-
-    # 3) Folder links: /folders/<id> (possibly under /drive/u/<n>/folders/<id>)
-    m = re.search(r'/folders/([a-zA-Z0-9_-]+)', share_url)
-    if m:
-        fid = m.group(1)
-        return {"type": "folder", "id": fid, "link": f"https://drive.google.com/drive/folders/{fid}"}
-
-    return None
+class PresignRequest(BaseModel):
+    filename: str
+    content_type: str | None = None
 
 
-@app.post("/generate")
-def generate_link(link: DriveLink):
-    result = convert_drive_link(link.share_url)
-    if not result:
-        return {"error": "Invalid Google Drive link"}
-    return result
+def get_s3_client():
+    # Prefer environment variables; boto3 will also fall back to shared config
+    aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY")
+    region = os.getenv("AWS_REGION", "us-east-2")
+
+    if not aws_access_key or not aws_secret:
+        # Allow boto3 to pick up credentials from environment, shared config, or IAM role
+        return boto3.client("s3", region_name=region, config=Config(signature_version="s3v4"))
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=aws_access_key,
+        aws_secret_access_key=aws_secret,
+        region_name=region,
+        config=Config(signature_version="s3v4"),
+    )
+
+
+@app.post("/generate-presigned-url")
+def generate_presigned_url(req: PresignRequest):
+    bucket = os.getenv("S3_BUCKET_NAME")
+    if not bucket:
+        raise HTTPException(status_code=500, detail="S3_BUCKET_NAME not configured in environment")
+
+    s3 = get_s3_client()
+    try:
+        params = {"Bucket": bucket, "Key": req.filename}
+        if req.content_type:
+            params["ContentType"] = req.content_type
+
+        upload_url = s3.generate_presigned_url(
+            "put_object",
+            Params=params,
+            ExpiresIn=3600,
+        )
+
+        region = os.getenv("AWS_REGION", "us-east-2")
+        public_url = f"https://{bucket}.s3.{region}.amazonaws.com/{req.filename}"
+
+        return {"upload_url": upload_url, "public_url": public_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
