@@ -1,6 +1,9 @@
-# FastAPI Python Simulation Image
+# FastAPI S3 Bridge
 
-A FastAPI-based Python application for simulation and image processing.
+A small FastAPI service that bridges the frontend to Amazon S3 object storage by
+generating presigned upload URLs and public file URLs. Frontends can request a
+presigned URL from this service, upload directly to S3, and then use the public
+URL to reference the uploaded object.
 
 ## Project Structure
 
@@ -41,8 +44,17 @@ fastapi-py-sim-img/
 
 ## API Endpoints
 
-- `GET /` - Welcome message
-- `GET /health` - Health check endpoint
+- `POST /generate-presigned-url` - Generate a presigned PUT URL and public object URL
+
+Example request to generate a presigned URL:
+
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+   -d '{"filename":"uploads/test.png","content_type":"image/png"}' \
+   http://127.0.0.1:8000/generate-presigned-url | jq .
+```
+
+The response contains `upload_url` (use with `PUT`) and `public_url`.
 
 ## Development
 
