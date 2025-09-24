@@ -1,10 +1,29 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import boto3
 from botocore.client import Config
+from dotenv import load_dotenv
+
+# Load environment variables from .env when present (development only)
+load_dotenv()
 
 app = FastAPI(title="S3 Presigned URL Generator")
+
+# CORS configuration: allow frontend origins for development and production
+origins = [
+    "http://localhost:5173",
+    "https://sismedika.fardil.com",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["POST", "OPTIONS", "PUT", "GET", "HEAD"],
+    allow_headers=["*"],
+)
 
 
 class PresignRequest(BaseModel):
